@@ -1,0 +1,22 @@
+version: '3'
+
+services:
+  postgres:
+    image: postgres:latest
+    env_file: ./.env
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+  python:
+    build:
+      context: ./src
+      dockerfile: Dockerfile
+    env_file: ./.env
+    depends_on:
+      - postgres
+    volumes:
+      - ./src/output:/app/output
+      
+volumes:
+  postgres_data:
