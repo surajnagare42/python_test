@@ -1,6 +1,9 @@
 # Use an official Python runtime as a parent image
 FROM python:3.8-slim
 
+# Install PostgreSQL client tools
+RUN apt-get update && apt-get install -y postgresql-client
+
 # Set the working directory in the container
 WORKDIR /app
 
@@ -17,4 +20,4 @@ EXPOSE 80
 ENV ENVIRONMENT=production
 
 # Run app.py when the container launches
-CMD ["python", "main.py"]
+CMD ["python", "main.py", "test_main.py"]

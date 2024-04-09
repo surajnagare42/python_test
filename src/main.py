@@ -1,5 +1,6 @@
 import os
-from sqlalchemy import create_engine
+from sqlite3 import ProgrammingError
+from sqlalchemy import create_engine, text
 from sqlalchemy.exc import OperationalError
 import requests
 from datetime import datetime, timedelta
@@ -7,9 +8,9 @@ import aiohttp
 import asyncio
 import os
 import csv
+import psycopg2
 
 def generate_dates(start_date_str, end_date_str):
-    # Convert start and end date strings to datetime objects using the desired format
     start_date = datetime.strptime(start_date_str, "%Y-%m-%d")
     end_date = datetime.strptime(end_date_str, "%Y-%m-%d")
     
@@ -39,7 +40,26 @@ async def fetch_data(session, date, api_key):
     async with session.get(url) as response:
         if response.status == 200:
             return await response.json()
+        elif response.status == 429:  # Rate limit exceeded
+            retry_after = int(response.headers.get('Retry-After', 10))  # Default to retry after 10 seconds
+            print(f"Rate limit exceeded. Retrying after {retry_after} seconds...")
+            await asyncio.sleep(retry_after)
+            return await fetch_data(session, date, api_key)
+        elif response.status == 404:
+            print("API data not found for:", date)
+            return None
+        elif response.status == 104:
+            print("The maximum allowed API amount of monthly API requests has been reached.")
+        elif response.status == 101:
+            print("No API Key was specified or an invalid API Key was specified.")
+        elif response.status == 103:
+            print("The requested API endpoint does not exist.")
+        elif response.status == 502:
+            print("No or an invalid 'start_date' has been specified.")
+        elif response.status == 502:
+            print("No or an invalid 'end_date' has been specified.")
         else:
+            print("API request failed with status code:", response.status)
             return None
 
 async def make_api_calls(dates):
@@ -54,14 +74,10 @@ async def make_api_calls(dates):
         return results
 
 def write_to_csv(data, filename="exchange_rates.csv"):
-    # Ensure the output directory exists
     output_dir = "output"
     os.makedirs(output_dir, exist_ok=True)
     
-    # Define the full path for the CSV file
     filepath = os.path.join(output_dir, filename)
-
-    # Define the CSV file header
     header = ["date", "base", "USD", "GBP", "EUR"]
 
     # Open the file in write mode
@@ -74,15 +90,52 @@ def write_to_csv(data, filename="exchange_rates.csv"):
         # Iterate through each item in the data list
         for item in data:
             if item and 'success' in item and item['success']:
-                # Extract the relevant data
+                # Extract the exchange data
                 date = item['date']
                 base = item['base']
                 usd_rate = item['rates']['USD']
                 gbp_rate = item['rates']['GBP']
                 eur_rate = item['rates']['EUR']
-                
-                # Write the data row
                 writer.writerow([date, base, usd_rate, gbp_rate, eur_rate])
+
+def create_exchange_rates_table(conn):
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS exchange_rates (
+                    id SERIAL PRIMARY KEY,
+                    date DATE NOT NULL,
+                    base VARCHAR(3) NOT NULL,
+                    USD NUMERIC(10, 6) NOT NULL,
+                    GBP NUMERIC(10, 6) NOT NULL,
+                    EUR NUMERIC(10, 6) NOT NULL
+                )
+            """)
+        conn.commit()
+        print("Exchange rates table created successfully.")
+    except Exception as e:
+        print("Error creating exchange_rates table:", e)
+
+def push_to_database(database_url):
+    try:
+        conn = psycopg2.connect(database_url)
+        create_exchange_rates_table(conn)
+
+        # Load CSV data into PostgreSQL table
+        with open('output/exchange_rates.csv', 'r') as csvfile:
+            reader = csv.reader(csvfile)
+            next(reader)  
+            with conn.cursor() as cur:
+                for row in reader:
+                    date, base, usd, gbp, eur = row
+                    sql = "INSERT INTO exchange_rates (date, base, USD, GBP, EUR) VALUES (%s, %s, %s, %s, %s)"
+                    cur.execute(sql, (date, base, usd, gbp, eur))
+        conn.commit()
+        print("CSV data successfully pushed to PostgreSQL database.")
+    except psycopg2.Error as e:
+        print("Error connecting to PostgreSQL:", e)
+    finally:
+        conn.close()
 
 
 def main():
@@ -115,7 +168,9 @@ def main():
 
     # Write API response to a CSV file
     write_to_csv(results)
-    
+    # Push CSV data to MySQL database
+    push_to_database(database_url)
+
 
 if __name__ == "__main__":
     main()

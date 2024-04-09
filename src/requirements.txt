@@ -2,3 +2,5 @@ requests
 SQLAlchemy
 psycopg2-binary
 aiohttp
+coverage
+testing.postgresql
